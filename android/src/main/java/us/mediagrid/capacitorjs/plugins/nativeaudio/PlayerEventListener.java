@@ -2,6 +2,8 @@ package us.mediagrid.capacitorjs.plugins.nativeaudio;
 
 import static androidx.media3.common.Player.*;
 
+import androidx.media3.common.Metadata;
+import androidx.media3.extractor.metadata.id3.TextInformationFrame;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 
@@ -34,7 +36,6 @@ public class PlayerEventListener implements Listener {
             } else if (isPlaying || audioSource.isPlaying()) {
                 status = "playing";
                 audioSource.setIsPlaying();
-                audioSource.audioMetadata.startUpdater();
             }
         }
 
@@ -57,6 +58,39 @@ public class PlayerEventListener implements Listener {
             audioSource.audioMetadata.stopUpdater();
 
             makeCall(audioSource.onEndCallbackId);
+        }
+    }
+
+    @Override
+    public void onMetadata(Metadata metadata) {
+        String title = null;
+        String artist = null;
+
+        for (int i = 0; i < metadata.length(); i++) {
+            Metadata.Entry entry = metadata.get(i);
+            if (entry instanceof TextInformationFrame) {
+                TextInformationFrame frame = (TextInformationFrame) entry;
+                if ("TIT2".equals(frame.id) && !frame.values.isEmpty()) {
+                    title = frame.values.get(0);
+                }
+                if ("TPE1".equals(frame.id) && !frame.values.isEmpty()) {
+                    artist = frame.values.get(0);
+                }
+            }
+        }
+
+        if (title != null || artist != null) {
+            if (title != null) audioSource.audioMetadata.songTitle = title;
+            if (artist != null) audioSource.audioMetadata.artistName = artist;
+            audioSource.changeMetadata(audioSource.audioMetadata);
+
+            // Fire onMetadataUpdate callback to JS
+            JSObject data = new JSObject();
+            data.put("title", audioSource.audioMetadata.songTitle);
+            data.put("artist", audioSource.audioMetadata.artistName);
+            data.put("song_title", audioSource.audioMetadata.songTitle);
+            data.put("artist_name", audioSource.audioMetadata.artistName);
+            makeCall(audioSource.audioMetadata.getOnMetadataUpdateCallbackId(), data);
         }
     }
 

@@ -258,9 +258,14 @@ public class AudioSource: NSObject, AVAudioPlayerDelegate {
             throw AudioPlayerError.invalidPath
         }
 
-        let player = AVPlayerItem.init(url: url.unsafelyUnwrapped)
+        let item = AVPlayerItem.init(url: url.unsafelyUnwrapped)
 
-        return player
+        // Add timed metadata output for reading ID3 from HLS segments
+        let metadataOutput = AVPlayerItemMetadataOutput(identifiers: nil)
+        metadataOutput.setDelegate(self, queue: .main)
+        item.add(metadataOutput)
+
+        return item
     }
 
     private func setupInterruptionNotifications() {
@@ -649,6 +654,50 @@ public class AudioSource: NSObject, AVAudioPlayerDelegate {
             call?.resolve()
         } else {
             call?.resolve(data)
+        }
+    }
+}
+
+// MARK: - Timed ID3 metadata from HLS segments
+extension AudioSource: AVPlayerItemMetadataOutputPushDelegate {
+    public func metadataOutput(
+        _ output: AVPlayerItemMetadataOutput,
+        didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
+        from track: AVPlayerItemTrack?
+    ) {
+        var titleChanged = false
+
+        for group in groups {
+            for item in group.items {
+                if let key = item.commonKey {
+                    if key == .commonKeyTitle, let title = item.stringValue {
+                        audioMetadata.songTitle = title
+                        titleChanged = true
+                    }
+                    if key == .commonKeyArtist, let artist = item.stringValue {
+                        audioMetadata.artistName = artist
+                        titleChanged = true
+                    }
+                }
+            }
+        }
+
+        if titleChanged {
+            updateMetadata()
+
+            // Fire onMetadataUpdate callback to JS
+            let callbackId = audioMetadata.getOnMetadataUpdateCallbackId()
+            if !callbackId.isEmpty {
+                makePluginCall(
+                    callbackId: callbackId,
+                    data: [
+                        "title": audioMetadata.songTitle,
+                        "artist": audioMetadata.artistName,
+                        "song_title": audioMetadata.songTitle,
+                        "artist_name": audioMetadata.artistName,
+                    ]
+                )
+            }
         }
     }
 }

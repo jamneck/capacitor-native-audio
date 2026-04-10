@@ -58,6 +58,10 @@ public class AudioMetadata {
         onMetadataUpdateCallbackId = callbackId
     }
 
+    public func getOnMetadataUpdateCallbackId() -> String {
+        return onMetadataUpdateCallbackId
+    }
+
     public func startUpdater() {
         if !hasUpdateUrl() || updateHandler != nil {
             return
