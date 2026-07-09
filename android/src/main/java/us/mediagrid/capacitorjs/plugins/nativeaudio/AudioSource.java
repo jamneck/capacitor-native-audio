@@ -3,6 +3,8 @@ package us.mediagrid.capacitorjs.plugins.nativeaudio;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
@@ -12,6 +14,9 @@ import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class AudioSource extends Binder {
 
@@ -54,6 +59,57 @@ public class AudioSource extends Binder {
         this.loopAudio = loopAudio;
 
         this.audioMetadata.setPluginOwner(pluginOwner).setUpdateCallBack(this::updateMetadata);
+        // Metadata updater runs on a background executor; Player must be read on
+        // the main/application looper (same convention as AudioPlayerPlugin.postToLooper).
+        this.audioMetadata.liveOffsetProvider = this::getCurrentLiveOffsetMs;
+    }
+
+    /**
+     * Thread-safe handoff of {@link Player#getCurrentLiveOffset()} for the metadata
+     * updater (background thread). Posts to the main looper when needed.
+     */
+    private long getCurrentLiveOffsetMs() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return readLiveOffsetFromPlayer();
+        }
+
+        AtomicLong result = new AtomicLong(C.TIME_UNSET);
+        CountDownLatch latch = new CountDownLatch(1);
+
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                result.set(readLiveOffsetFromPlayer());
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        try {
+            if (!latch.await(500, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Timed out waiting for getCurrentLiveOffset on main thread");
+                return C.TIME_UNSET;
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return C.TIME_UNSET;
+        }
+
+        return result.get();
+    }
+
+    private long readLiveOffsetFromPlayer() {
+        Player p = player;
+
+        if (p == null) {
+            return C.TIME_UNSET;
+        }
+
+        try {
+            return p.getCurrentLiveOffset();
+        } catch (Exception ex) {
+            Log.w(TAG, "getCurrentLiveOffset failed", ex);
+            return C.TIME_UNSET;
+        }
     }
 
     public void initialize(Context context) {
