@@ -57,6 +57,12 @@ public class AudioSource: NSObject, AVAudioPlayerDelegate {
 
         super.init()
 
+        // Wall-clock of audio currently reaching the listener (HLS PROGRAM-DATE-TIME).
+        // Used by AudioMetadata for buffer-depth-correct now-playing lookup.
+        self.audioMetadata.currentDateProvider = { [weak self] in
+            self?.playerItem?.currentDate()
+        }
+
         self.audioMetadata.setPluginOwner(pluginOwner: pluginOwner).setUpdateCallback(
             callback: self.updateMetadata
         )
