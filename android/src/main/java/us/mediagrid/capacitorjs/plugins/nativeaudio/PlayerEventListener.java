@@ -14,6 +14,13 @@ public class PlayerEventListener implements Listener {
     private AudioPlayerPlugin plugin;
     private AudioSource audioSource;
 
+    // Last title/artist actually taken from in-band ID3. Held separately from
+    // audioSource.audioMetadata because the metadataUpdateUrl poll writes that
+    // too -- comparing against it would make every poll look like a change and
+    // re-fire the whole chain on the poll's cadence.
+    private String lastId3Title;
+    private String lastId3Artist;
+
     public PlayerEventListener(AudioPlayerPlugin plugin, AudioSource audioSource) {
         this.plugin = plugin;
         this.audioSource = audioSource;
@@ -80,6 +87,23 @@ public class PlayerEventListener implements Listener {
         }
 
         if (title != null || artist != null) {
+            // The stream tags EVERY segment, so the same song arrives every few
+            // seconds. Only act on an actual change: replaceMediaItem() and a
+            // bridge round-trip per segment would be pure churn, and the poll
+            // still re-asserts artwork on its own cadence.
+            String newTitle = title != null ? title : lastId3Title;
+            String newArtist = artist != null ? artist : lastId3Artist;
+
+            if (
+                java.util.Objects.equals(newTitle, lastId3Title) &&
+                java.util.Objects.equals(newArtist, lastId3Artist)
+            ) {
+                return;
+            }
+
+            lastId3Title = newTitle;
+            lastId3Artist = newArtist;
+
             if (title != null) audioSource.audioMetadata.songTitle = title;
             if (artist != null) audioSource.audioMetadata.artistName = artist;
             audioSource.changeMetadata(audioSource.audioMetadata);
