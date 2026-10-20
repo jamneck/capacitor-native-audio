@@ -87,7 +87,7 @@ public class AudioMetadata {
         updateRunner = new Runnable() {
             @Override
             public void run() {
-                updateMetadataByUrl(() -> updateHandler.postDelayed(this, updateInterval * 1000));
+                updateMetadataByUrl(this);
             }
         };
 
@@ -110,44 +110,66 @@ public class AudioMetadata {
         return updateUrl != null && updateUrl != "";
     }
 
-    public void updateMetadataByUrl(Runnable requeueCallback) {
+    /**
+     * Fetch updateUrl once and apply the result. `poller` is the updater's
+     * runner, rescheduled after every attempt, or null for a one-shot update.
+     */
+    public void updateMetadataByUrl(Runnable poller) {
         if (pluginOwner.executorService.isShutdown()) {
             return;
         }
 
         pluginOwner.executorService.submit(() -> {
-            try {
-                if (!makeUpdateRequest()) {
+            JSObject json = makeUpdateRequest();
+
+            // Everything after the request runs on the main thread, which also
+            // owns startUpdater/stopUpdater, so the check below cannot race them.
+            new Handler(Looper.getMainLooper()).post(() -> {
+                // stopUpdater() while the request was in flight -- or a stop and
+                // a restart -- orphans this poller. Rescheduling it threw on the
+                // null handler, or after a restart left two pollers running.
+                if (poller != null && poller != updateRunner) {
                     return;
                 }
 
-                if (updateCallback != null) {
-                    // Updating the MediaController needs to be on the main thread
-                    new Handler(Looper.getMainLooper()).post(() -> {
-                        updateCallback.run();
-                    });
-                }
-
-                if (onMetadataUpdateCallbackId != null) {
-                    PluginCall call = pluginOwner
-                        .getBridge()
-                        .getSavedCall(onMetadataUpdateCallbackId);
-
-                    if (call != null) {
-                        call.resolve(updateFullResponse);
+                if (json != null) {
+                    try {
+                        applyUpdate(json);
+                    } catch (Exception ex) {
+                        Log.e(TAG, "There was an error running the metadata update", ex);
                     }
                 }
-            } catch (Exception ex) {
-                Log.e(TAG, "There was an error running the metadata update", ex);
-            }
 
-            if (requeueCallback != null) {
-                requeueCallback.run();
-            }
+                // A failed request is retried on the next interval. It used to
+                // return before this point, which ended the poll for the session.
+                if (poller != null) {
+                    updateHandler.postDelayed(poller, updateInterval * 1000);
+                }
+            });
         });
     }
 
-    private boolean makeUpdateRequest() {
+    private void applyUpdate(JSObject json) {
+        updateFullResponse = json;
+        albumTitle = json.getString("album_title");
+        artistName = json.getString("artist_name");
+        songTitle = json.getString("song_title");
+        artworkSource = json.getString("artwork_source");
+
+        if (updateCallback != null) {
+            updateCallback.run();
+        }
+
+        if (onMetadataUpdateCallbackId != null) {
+            PluginCall call = pluginOwner.getBridge().getSavedCall(onMetadataUpdateCallbackId);
+
+            if (call != null) {
+                call.resolve(updateFullResponse);
+            }
+        }
+    }
+
+    private JSObject makeUpdateRequest() {
         Log.i(TAG, "Getting metadata from URL " + updateUrl);
         HttpURLConnection urlConnection = null;
 
@@ -174,13 +196,7 @@ public class AudioMetadata {
 
                 Log.i(TAG, json.toString());
 
-                updateFullResponse = json;
-                albumTitle = json.getString("album_title");
-                artistName = json.getString("artist_name");
-                songTitle = json.getString("song_title");
-                artworkSource = json.getString("artwork_source");
-
-                return true;
+                return json;
             }
         } catch (Exception ex) {
             Log.e(TAG, "An error occurred trying to get updated metadata", ex);
@@ -190,6 +206,6 @@ public class AudioMetadata {
             }
         }
 
-        return false;
+        return null;
     }
 }
