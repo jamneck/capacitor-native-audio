@@ -242,13 +242,25 @@ public class AudioSource extends Binder {
     }
 
     private void updateMetadata() {
-        var currentMediaItem = getPlayer().getCurrentMediaItem();
+        Player player = getPlayer();
+        var currentMediaItem = player == null ? null : player.getCurrentMediaItem();
+
+        // Both callers are asynchronous: the metadataUpdateUrl poll is posted to
+        // the main thread when its request completes, and in-band ID3 comes from
+        // the service's own ExoPlayer. Either can land after the MediaController
+        // was released or lost its session, and a controller that is not
+        // connected reports Timeline.EMPTY -- no current item. Dereferencing it
+        // was 21 of 23 crash events on Android 1.9.2. Nothing to update then.
+        if (currentMediaItem == null) {
+            return;
+        }
+
         var newMediaItem = currentMediaItem
             .buildUpon()
             .setMediaMetadata(getMediaMetadata())
             .build();
 
-        getPlayer().replaceMediaItem(0, newMediaItem);
+        player.replaceMediaItem(0, newMediaItem);
     }
 
     private MediaMetadata getMediaMetadata() {
